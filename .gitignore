@@ -1,0 +1,22 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Generated artifacts / caches -- all regenerable by running the scripts
+*.pkl
+*.npz
+bist30_strategy_lab/_leaderboard.csv
+intraday_pairs_trading/_backtest_summary.csv
+intraday_pairs_trading/_cost_sensitivity.csv
+intraday_pairs_trading/_trades.csv
+intraday_pairs_trading/screening_results.csv
+intraday_pairs_trading/_selected_pair.txt
+intraday_pairs_trading/dashboard.html
+examples/*.png
+
+# Editor/tool local state
+.claude/
+.obsidian/
+.DS_Store
