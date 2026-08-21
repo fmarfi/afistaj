@@ -19,7 +19,7 @@ This is a self-contained mission, sibling to `examples/` and `intraday_pairs_tra
 | `validation.py` | The bias-correction layer: block bootstrap, Deflated Sharpe Ratio, cross-universe consistency, parameter-perturbation sensitivity, the leaderboard. |
 | `02_run_full_universe_backtests.py` | Batch: download once, evaluate all 3 families (+ the cost-calibrated mean-reversion variant) across the full universe, cache to `_universe_backtest_cache.pkl`. |
 | `03_run_validation_leaderboard.py` | Batch: build the DSR-corrected leaderboard + bootstrap + sensitivity check from the cache, save `_leaderboard.csv` / `_leaderboard_detail.pkl`. |
-| `04_interactive_dashboard.py` | Flask dashboard (port 5100): a **Leaderboard** tab (reads 03's cache) and an **Explore** tab (live single-backtest parameter tweaking per family). |
+| `04_interactive_dashboard.py` | Flask dashboard (port 5100): a **Leaderboard** tab (reads 03's cache) and an **Explore** tab (live single-backtest parameter tweaking per family, with every individual trade marked on zoomable Plotly charts — including a price chart per traded stock carrying that stock's own buys and sells — and logged as an expandable card; see below), plus a **Robustness** tab (reads 05's cache: phase distributions, parameter-grid heatmaps and equity against the buy-and-hold benchmark). |
 | `test_*.py` | pytest regression suites, one per module, synthetic data only (no network) — see each file for what's covered. |
 
 ## The workflow
@@ -106,7 +106,63 @@ Run `03_run_validation_leaderboard.py` to see the current numbers; the dashboard
 | `entry_z` / `stop_z` (meanrev, PCA) | 1.5 / 3.5 | Same interpretable meaning as both prior missions. |
 | `validation.N_TRIALS` (in `03_...py`) | 14 | See "Deflated Sharpe Ratio" above; bumped from 12 for the cost-calibration variant. |
 | `_engine_meanrev.DEFAULTS.cost_per_round_trip_bps` | 5 | Assumed round-trip cost for cost-calibrated entry_z (opt-in, see above). |
-| `_common.SCALE_MIN` / `SCALE_MAX` | 0.2 / 3.0 | No-leverage bound, same as `intraday_pairs_trading/_engine.py`. |
+| `_common.SCALE_MIN` / `SCALE_MAX` | 0.2 / 3.0 | No-leverage bound, same as `intraday_pairs_trading/_engine.py`. Also the range the mean-reversion engine's per-bar position size moves in — see "What 'the amount traded' means". |
+
+## Reading the individual trades (Explore tab)
+
+An aggregate return has to be checkable trade by trade, not taken on faith from one number — so the Explore tab shows the positions themselves, the same way `intraday_pairs_trading/04_interactive_dashboard.py` does:
+
+- **Equity curve** (and, for mean reversion, the **z-score signal** stacked under it on one shared x axis) — an outlined triangle where each trade opened, a filled dot where it closed (green = profit, red = loss); hover either for the trade number, time, exit reason and PnL. The z panel carries each bar's own entry (dashed) and stop (dotted) bands, with disqualified-regime stretches shaded; the bands move bar to bar when `derive_entry_z_from_cost` is on, which is expected, not a rendering artifact. Both are drawn over the full history with the in-sample stretch shaded — the flat equity there is the untraded fit window, not missing data.
+- **Trades on each stock's own chart** — one price panel per stock the run actually traded, carrying that stock's *own* buys and sells at the prices the engine recorded, with green stretches where it was held long and orange where it was held short. A pair trade appears on **both** legs in opposite directions (a long spread is a buy in A *and* a sell in B), which is the one thing neither the equity curve nor the spread's z-score can show — both aggregate the legs away. Mean reversion stacks its two legs; the basket families get a picker over their most-traded names (`MAX_TICKER_PANELS`, 8 — a page-weight cap, since every stock embedded in the page carries its own full close series; the trade log below still lists every trade). Underneath, a per-stock table gives legs traded, the long/short split and the average side-adjusted move, so you can see which leg carried a pair.
+- **Trade contribution** — per-trade PnL as bars plus the running total. If one bar carries the whole cumulative line, the headline return is one lucky trade, not an edge.
+- **Trade log** — one collapsible card per trade. Collapsed, it shows entry→exit time, direction (named as the two actual stocks, e.g. "sell AAA.IS / buy BBB.IS", not "short spread"), entry/exit z, hold, exit reason, **the amount actually traded** and PnL; expanded, each leg's amount, share count and real quoted entry/exit price plus its % move, so a specific trade can be checked against real market data.
+
+### What "the amount traded" means
+
+The engines produce abstract PnL — a fractional basket return, or log-spread units — and `dollar_per_unit_for_trade` turns that into lira as `starting capital / scale_max` (100,000 TRY for the basket engines, which declare `scale_max = 1.0`; 33,333 TRY for mean reversion at `scale_max = 3.0`). That base unit is a *conversion factor*, identical on every trade, and on its own it says nothing about how big any one position was. `base_unit_multiplier` supplies the missing half by reading what the engine's own sizing did at that bar:
+
+| Engine | Multiplier | Traded amount per name |
+| --- | --- | --- |
+| Mean reversion | that bar's realized-vol `scale`, in [0.2, 3.0] | unit × scale on leg A, × the hedge ratio `beta` again on leg B |
+| Momentum / PCA | `1 / n` names held at that bar | an equal share of the book |
+
+So a momentum run with `top_n=5` puts **20,000 TRY** into each name, not 100,000 (and 50,000 each on bars where only two names qualified); a PCA run holding 13–28 names at once puts 3,500–7,700 TRY into each. The mean-reversion legs come out beta-weighted and vol-scaled — e.g. 59,415 TRY of AKBNK against 21,851 TRY of TCELL at `scale = 1.78, beta = 0.368`.
+
+Three caveats the numbers carry, none of them hidden by the dashboard:
+
+- **Sizing is off starting capital and never compounds.** Equity can run to 153k and the next trade is still sized off 100k. That is what keeps Sharpe and DSR honest — under compounding the late trades dominate the statistics purely by being bigger — but it understates both what a reinvesting account would earn and the drawdown it would take.
+- **The no-leverage bound is on the spread unit, not on gross two-leg notional.** `1 × scale_max × (capital/scale_max) = capital` holds per leg, but a market-neutral pair commits capital on *both* sides, so the card's gross figure can exceed the base unit. It is gross exposure on a hedged position, not a levered bet.
+- **Share counts are indicative.** They are amount ÷ quoted price; the backtest sizes in continuous units and never rounds to a lot.
+
+Momentum and PCA log a ticker per trade rather than a pair; their cards show the single leg's prices (attached by the dashboard from the same price panel the backtest ran on — see `attach_single_leg_prices`) and momentum has no z-score column, since it doesn't trade one. Momentum is long-only by construction; the PCA engine records a `direction` per trade so the buy/sell markers come from what it actually did rather than from re-deriving the side from the sign of `entry_z`.
+
+### The charts are Plotly figures, not images
+
+Every chart is live: drag to zoom, double-click to reset, scroll to zoom the x axis, hover for a bar's values, click a legend entry to hide a series, or save a PNG from the mode bar. "Why did it trade there" is a question you answer by zooming into the bar, which the previous static PNGs couldn't support.
+
+Two things the page does that Plotly can't do server-side (both in `PAGE_JS`):
+
+- **Shared x range** — plotly.js shares an axis only *within* one figure, but the equity curve, the signal and each stock's price panel are separate figures over the same bar timeline. Zooming one pans and zooms the others, so a drawdown lines up with the trades that caused it. Charts whose x axis is *not* the timeline (trade #, DSR) opt out via the `data-xsync` attribute, so they can't push a nonsense range onto the rest.
+- **Theme** — a figure's colors are baked into its JSON, so the page re-colors every chart to match `prefers-color-scheme`, and again whenever the OS theme flips.
+
+The x axis uses `SESSION_RANGEBREAKS` to drop closed hours and weekends; without them a datetime axis spends most of its width on hours the panel has no bars for, and a multi-day hold looks like a flat line. Bar timestamps are plotted as tz-naive Istanbul wall time (`bar_x`) because plotly.js re-interprets an offset-carrying timestamp in the *viewer's* timezone, which would slide every BIST bar off its session. plotly.js itself is served once from the dashboard's own `/plotly.js` route (≈5 MB, browser-cached, no CDN, so the Leaderboard tab still works offline) rather than inlined into every figure.
+
+## Robustness bench (momentum upgrades)
+
+A single backtest of the momentum family is not a result. Shifting only *which bar* the rebalance grid lands on moves it from 13% to 57% annualized — same code, same parameters, same data — so the headline is a draw from a distribution nobody had looked at. Three files exist to look at it:
+
+| File | What it does |
+| --- | --- |
+| `momentum_monte_carlo.py` | Rebalance-phase sweep, out-of-sample start-date sweep, permutation tests (is the ranking better than a random draw from the same names?), buy-and-hold benchmark, and block bootstrap. Its fast walk-forward is checked bar-for-bar against `_engine_momentum` before any simulation runs. |
+| `momentum_upgrades.py` | Eleven candidate rules — ±DI / ADX (Wilder), Hurst-regime and volatility-adjusted ranking — each measured over the whole phase distribution *and* across its own parameter neighbourhood. `--variant <name>` backtests one in depth; `--list` names them. Pulls its own OHLC, since DMI needs High/Low and the mission panel is close-only. |
+| `_engine_momentum_variants.py` | The momentum engine with the selection rule swappable, so any bench variant can be run as a **full backtest** — trade log and all — from the Explore tab. It imports the rules from `momentum_upgrades.make_selector` rather than reimplementing them, so the bench and the backtest cannot drift apart, and `variant="baseline"` reproduces `run_full_backtest_momentum`'s pnl and trades exactly. |
+| `05_run_upgrade_bench.py` | Batch: runs all of it and caches `_upgrade_bench.pkl` for the dashboard's **Robustness** tab. Takes ~1 minute; far too slow to sit inside a web request, hence the same batch-then-render split as 02/03. |
+
+In the **Explore** tab, "Momentum upgrades (DMI / ADX / Hurst)" is a fourth selectable family: pick a rule from the dropdown and it backtests on real history with the same equity curve, per-stock buy/sell charts, trade cards and cost table as the built-in families, plus its own DMI window, ADX threshold and Hurst settings. It is the only family that needs OHLC (DMI is built from highs and lows), so it fetches its own panel — see `get_ohlc`.
+
+**Phase-neutral ("tranched") is the number to quote.** The book is staggered across every rebalance offset, which removes the phase luck instead of hoping for a good draw. It adds no signal and cannot manufacture edge — it is the same result every time you run it.
+
+**What the bench found, as of the 2023-10 → 2026-08 hourly panel:** no variant beats equal-weight buy-and-hold (28.3%, Sharpe 1.24) once phase luck is removed *and* the rule is re-measured around its own settings. `ma_hurst` and `rank_adx` clear the benchmark at one setting and go negative at a neighbouring one — a fitted cell, not an edge. ±DI as a direction gate consistently *hurt*; ADX (trend strength) and Hurst (persistence) helped, but only in narrow parameter regions. With 133 rebalances in the sample, that is what overfitting looks like, and more indicators will produce more cells. The informative next step is more independent evidence — the same bench on daily bars over a decade — not another filter.
 
 ## Future extensions (deliberately deferred, not built in v1)
 

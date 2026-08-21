@@ -171,6 +171,36 @@ def dollar_per_unit_for_trade(starting_capital, scale_max=SCALE_MAX):
     return starting_capital / scale_max
 
 
+def base_unit_multiplier(results, bar_idx):
+    """
+    How many base units a position opened at `bar_idx` actually put to
+    work, per leg. Multiply by dollar_per_unit_for_trade's unit to get the
+    real traded amount in currency.
+
+    The three engines size positions in two different ways and both are
+    already recorded bar by bar in their own `results` frame, so this reads
+    what the engine did rather than re-deriving it:
+
+    - vol-targeted spread engine (`scale` column): a +-1-unit spread
+      position multiplied by that bar's realized-vol scale, bounded by
+      SCALE_MIN/SCALE_MAX.
+    - equal-weighted basket engines (`n_held` / `n_active`): each held name
+      gets 1/n of the book, so the per-name multiplier shrinks as the
+      basket grows -- top_n=5 puts a fifth of the unit into each name.
+
+    Returns 1.0 for a bar with nothing held (or an engine that records
+    neither), which callers should read as "one whole unit", not as an
+    open position -- ask the trade log what was open.
+    """
+    if "scale" in results:
+        return float(results["scale"].iat[bar_idx])
+    for column in ("n_held", "n_active"):
+        if column in results:
+            n_positions = float(results[column].iat[bar_idx])
+            return 1.0 / n_positions if n_positions > 0 else 1.0
+    return 1.0
+
+
 def add_capital_pnl(result, starting_capital):
     """
     Adds currency-denominated fields to a run_full_backtest_*() result:

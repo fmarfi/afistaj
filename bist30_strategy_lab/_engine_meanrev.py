@@ -262,7 +262,11 @@ def run_signal_pnl_and_trades(paths, timestamps, oos_start_idx, n, vol_window):
 
     pnl = np.roll(position, 1) * dspread * scale
     pnl[oos_start_idx] = 0.0
-    return pnl, position, trades, n_stops, n_regime_flat, n_trades
+    # scale is returned, not just consumed: it IS the position size this bar
+    # (a +-1-unit spread position scaled by the vol target), so it's what
+    # turns an abstract unit into a real traded amount downstream -- see
+    # _common.base_unit_multiplier.
+    return pnl, position, trades, n_stops, n_regime_flat, n_trades, scale
 
 
 def attach_trade_pnl(trades, pnl, timestamps):
@@ -336,7 +340,7 @@ def run_full_backtest_meanrev(prices, params=None, bars_per_year=None, screening
     log_a, log_b = pair_log[ticker_a].to_numpy(), pair_log[ticker_b].to_numpy()
 
     paths = walk_forward_meanrev(log_a, log_b, pair_sess, pair_split_idx, params)
-    pnl, position, trades, n_stops, n_regime_flat, n_trades = run_signal_pnl_and_trades(
+    pnl, position, trades, n_stops, n_regime_flat, n_trades, scale = run_signal_pnl_and_trades(
         paths, pair_log.index.to_numpy(), pair_split_idx, len(pair_log), params["vol_window"],
     )
     trades = attach_trade_pnl(trades, pnl, pair_log.index.to_numpy())
@@ -348,7 +352,7 @@ def run_full_backtest_meanrev(prices, params=None, bars_per_year=None, screening
         "timestamp": pair_log.index, "beta": paths["beta_path"], "z": paths["z_path"],
         "qualified": paths["qualified_path"], "spread": paths["spread_path"],
         "half_life_bars": paths["half_life_path"], "entry_z": paths["entry_z_path"],
-        "stop_z": paths["stop_z_path"], "position": position, "pnl": pnl,
+        "stop_z": paths["stop_z_path"], "position": position, "scale": scale, "pnl": pnl,
     })
 
     return dict(

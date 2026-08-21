@@ -160,6 +160,11 @@ def walk_forward_pca(prices, params):
                                 "ticker": tk, "entry_time": prices.index[entry_t],
                                 "exit_time": prices.index[t], "entry_z": entry_zv,
                                 "exit_z": z_t, "hold_bars": t - entry_t, "exit_reason": reason,
+                                # Which way this name was actually held, recorded
+                                # rather than left to be re-derived from the sign
+                                # of entry_z downstream (the dashboard draws real
+                                # buy/sell markers on each stock's own chart).
+                                "direction": "long" if pos == 1.0 else "short",
                                 "_entry_t": entry_t, "_exit_t": t,
                             })
                             del position[tk]
@@ -170,7 +175,9 @@ def walk_forward_pca(prices, params):
         trades.append({
             "ticker": tk, "entry_time": prices.index[entry_t], "exit_time": prices.index[n - 1],
             "entry_z": entry_zv, "exit_z": float("nan"), "hold_bars": n - 1 - entry_t,
-            "exit_reason": "end of backtest", "_entry_t": entry_t, "_exit_t": n - 1,
+            "exit_reason": "end of backtest",
+            "direction": "long" if position[tk] == 1.0 else "short",
+            "_entry_t": entry_t, "_exit_t": n - 1,
         })
 
     # Per-trade pnl attribution: sum this ticker's bar-by-bar contribution

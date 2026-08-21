@@ -164,3 +164,39 @@ def test_cost_sensitivity_is_non_increasing_in_cost():
     table = c.cost_sensitivity_table(pnl, position, 0, bars_per_year=2000)
     rets = table["annualized return"].to_numpy()
     assert np.all(np.diff(rets) <= 1e-9)
+
+
+def test_base_unit_multiplier_reads_vol_scale_for_spread_engine():
+    results = pd.DataFrame({"scale": [0.2, 1.0, 3.0], "position": [1.0, -1.0, 1.0]})
+    assert c.base_unit_multiplier(results, 0) == pytest.approx(0.2)
+    assert c.base_unit_multiplier(results, 2) == pytest.approx(3.0)
+
+
+def test_base_unit_multiplier_splits_the_book_across_basket_names():
+    """top_n=5 puts a fifth of the unit into each name, not the whole unit."""
+    results = pd.DataFrame({"n_held": [0, 1, 5]})
+    assert c.base_unit_multiplier(results, 1) == pytest.approx(1.0)
+    assert c.base_unit_multiplier(results, 2) == pytest.approx(0.2)
+    assert c.base_unit_multiplier(pd.DataFrame({"n_active": [4]}), 0) == pytest.approx(0.25)
+
+
+def test_base_unit_multiplier_is_one_when_nothing_is_held_or_recorded():
+    assert c.base_unit_multiplier(pd.DataFrame({"n_held": [0]}), 0) == pytest.approx(1.0)
+    assert c.base_unit_multiplier(pd.DataFrame({"pnl": [0.0]}), 0) == pytest.approx(1.0)
+
+
+def test_traded_amount_never_exceeds_capital_for_a_basket_name():
+    """Each name's amount is unit/n, so the whole book is one unit -- never levered."""
+    capital = 100_000
+    unit = c.dollar_per_unit_for_trade(capital, scale_max=1.0)
+    for n_held in (1, 3, 5, 30):
+        results = pd.DataFrame({"n_held": [n_held]})
+        per_name = unit * c.base_unit_multiplier(results, 0)
+        assert per_name * n_held == pytest.approx(capital)
+
+
+def test_spread_unit_amount_stays_within_capital_at_max_scale():
+    capital = 100_000
+    unit = c.dollar_per_unit_for_trade(capital)
+    results = pd.DataFrame({"scale": [c.SCALE_MAX]})
+    assert unit * c.base_unit_multiplier(results, 0) == pytest.approx(capital)
